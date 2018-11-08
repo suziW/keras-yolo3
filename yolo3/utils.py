@@ -33,13 +33,16 @@ def letterbox_image(image, size):
 def rand(a=0, b=1):
     return np.random.rand()*(b-a) + a
 
-def get_random_data(annotation_line, input_shape, random=True, max_boxes=20, jitter=.3, hue=.1, sat=1.5, val=1.5, proc_img=True):
+def get_random_data(annotation_line, input_shape, random=True, max_boxes=20, jitter=.3, hue=.1, sat=1.5, val=1.5, proc_img=True):#random means resize pic to random size around inputshape
     '''random preprocessing for real-time data augmentation'''
-    line = annotation_line.split()
+    line = annotation_line.split('||')
+    if line[0][-1] == '\n': line[0] = line[0][:-1]
+    # print('++++++++++++++++', annotation_line, line)
     image = Image.open(line[0])
     iw, ih = image.size
     h, w = input_shape
     box = np.array([np.array(list(map(int,box.split(',')))) for box in line[1:]])
+    # print('++++++++++++++++iw, ih, h, w, box', iw, ih, h, w, box)
 
     if not random:
         # resize image
@@ -51,9 +54,13 @@ def get_random_data(annotation_line, input_shape, random=True, max_boxes=20, jit
         image_data=0
         if proc_img:
             image = image.resize((nw,nh), Image.BICUBIC)
+            # print('+++++++++++++++++++++image.size', image.size)
             new_image = Image.new('RGB', (w,h), (128,128,128))
+            # print('+++++++++++++++++++++new_image.size', new_image.size)
             new_image.paste(image, (dx, dy))
+            # print('+++++++++++++++++++++new_image.size', new_image.size)
             image_data = np.array(new_image)/255.
+            # print('+++++++++++++++++++++image_data.size', image_data.shape)
 
         # correct boxes
         box_data = np.zeros((max_boxes,5))
@@ -63,12 +70,13 @@ def get_random_data(annotation_line, input_shape, random=True, max_boxes=20, jit
             box[:, [0,2]] = box[:, [0,2]]*scale + dx
             box[:, [1,3]] = box[:, [1,3]]*scale + dy
             box_data[:len(box)] = box
-
+        # print('++++++++++++++++++++++++++++box_data',  box_data)
         return image_data, box_data
 
     # resize image
     new_ar = w/h * rand(1-jitter,1+jitter)/rand(1-jitter,1+jitter)
     scale = rand(.25, 2)
+    # print('++++++++++++++++++++++++++++new_ar, scale', new_ar, scale, rand(1-jitter,1+jitter), rand(1-jitter,1+jitter), rand(1-jitter,1+jitter))
     if new_ar < 1:
         nh = int(scale*h)
         nw = int(nh*new_ar)
@@ -76,13 +84,17 @@ def get_random_data(annotation_line, input_shape, random=True, max_boxes=20, jit
         nw = int(scale*w)
         nh = int(nw/new_ar)
     image = image.resize((nw,nh), Image.BICUBIC)
+    # print('+++++++++++++++++++++image.size, nh, nw', image.size, nh, nw)
+    # image.show()
 
     # place image
     dx = int(rand(0, w-nw))
     dy = int(rand(0, h-nh))
     new_image = Image.new('RGB', (w,h), (128,128,128))
+    # print('++++++++++++++++++++++++++++dx, dy, new_image.size', dx, dy, new_image.size)
     new_image.paste(image, (dx, dy))
     image = new_image
+    # image.show()
 
     # flip image or not
     flip = rand()<.5

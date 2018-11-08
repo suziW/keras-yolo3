@@ -70,6 +70,7 @@ def make_last_layers(x, num_filters, out_filters):
 def yolo_body(inputs, num_anchors, num_classes):
     """Create YOLO_V3 model CNN body in Keras."""
     darknet = Model(inputs, darknet_body(inputs))
+    # print('????????????????????/', len(darknet.layers)) # 185
     x, y1 = make_last_layers(darknet.output, 512, num_anchors*(num_classes+5))
 
     x = compose(
@@ -123,28 +124,28 @@ def yolo_head(feats, anchors, num_classes, input_shape, calc_loss=False):
     """Convert final layer features to bounding box parameters."""
     num_anchors = len(anchors)
     # Reshape to batch, height, width, num_anchors, box_params.
-    anchors_tensor = K.reshape(K.constant(anchors), [1, 1, 1, num_anchors, 2])
-
-    grid_shape = K.shape(feats)[1:3] # height, width
-    grid_y = K.tile(K.reshape(K.arange(0, stop=grid_shape[0]), [-1, 1, 1, 1]),
+    anchors_tensor = K.reshape(K.constant(anchors), [1, 1, 1, num_anchors, 2])  # [1, 1, 1, 3, 2]
+    # print('@@@@@@@@@@@@@@@ anchors_tensor, anchors', anchors_tensor, anchors)
+    grid_shape = K.shape(feats)[1:3] # height, width (2, )
+    grid_y = K.tile(K.reshape(K.arange(0, stop=grid_shape[0]), [-1, 1, 1, 1]),  #   [?, ?, 1, 1]
         [1, grid_shape[1], 1, 1])
-    grid_x = K.tile(K.reshape(K.arange(0, stop=grid_shape[1]), [1, -1, 1, 1]),
+    grid_x = K.tile(K.reshape(K.arange(0, stop=grid_shape[1]), [1, -1, 1, 1]),  # [?, ?, 1, 1]
         [grid_shape[0], 1, 1, 1])
-    grid = K.concatenate([grid_x, grid_y])
+    grid = K.concatenate([grid_x, grid_y])  # [?, ?, 1, 2] 这是 格子坐标，一共长乘以宽的格子数个两维坐标
     grid = K.cast(grid, K.dtype(feats))
-
+    # print('@@@@@@@@@@@@@@@@ grid_shape, grid_y, grid_x, grid', grid_shape, grid_y, grid_x, grid)
     feats = K.reshape(
-        feats, [-1, grid_shape[0], grid_shape[1], num_anchors, num_classes + 5])
+        feats, [-1, grid_shape[0], grid_shape[1], num_anchors, num_classes + 5])    # [?, grid_shape[0], grid_shape[1], 3, 85]
 
     # Adjust preditions to each spatial grid point and anchor size.
     box_xy = (K.sigmoid(feats[..., :2]) + grid) / K.cast(grid_shape[::-1], K.dtype(feats))
-    box_wh = K.exp(feats[..., 2:4]) * anchors_tensor / K.cast(input_shape[::-1], K.dtype(feats))
+    box_wh = K.exp(feats[..., 2:4]) * anchors_tensor / K.cast(input_shape[::-1], K.dtype(feats))    # TUDO 
     box_confidence = K.sigmoid(feats[..., 4:5])
     box_class_probs = K.sigmoid(feats[..., 5:])
 
     if calc_loss == True:
         return grid, feats, box_xy, box_wh
-    return box_xy, box_wh, box_confidence, box_class_probs
+    return box_xy, box_wh, box_confidence, box_class_probs  # [?,?,?,3]
 
 
 def yolo_correct_boxes(box_xy, box_wh, input_shape, image_shape):
@@ -173,26 +174,31 @@ def yolo_correct_boxes(box_xy, box_wh, input_shape, image_shape):
     return boxes
 
 
-def yolo_boxes_and_scores(feats, anchors, num_classes, input_shape, image_shape):
+def yolo_boxes_and_scores(feats, anchors, num_classes, input_shape, image_shape):   #  anchors: [[116.  90.] [156. 198.] [373. 326.]], feats [?, ?, ?, 255]
     '''Process Conv layer output'''
-    box_xy, box_wh, box_confidence, box_class_probs = yolo_head(feats,
+    box_xy, box_wh, box_confidence, box_class_probs = yolo_head(feats,      # [??32] [??32] [??31] [??380]
         anchors, num_classes, input_shape)
-    boxes = yolo_correct_boxes(box_xy, box_wh, input_shape, image_shape)
+    print('||||||||||||||||||||||',feats, input_shape)
+    # print('///////////////////box_xy, box_wh, box_confidence, box_class_probs', box_xy, box_wh, box_confidence, box_class_probs)
+    boxes = yolo_correct_boxes(box_xy, box_wh, input_shape, image_shape)    # 把box 的xywh换成topleftdownright, 并且scale到原始图片大小
+    print('================== boxes', boxes)
     boxes = K.reshape(boxes, [-1, 4])
     box_scores = box_confidence * box_class_probs
+    print('================== box_scores', box_scores)
     box_scores = K.reshape(box_scores, [-1, num_classes])
     return boxes, box_scores
 
 
 def yolo_eval(yolo_outputs,
-              anchors,
-              num_classes,
+              anchors,              #  [[ 10.  13.], [ 16.  30.], [ 33.  23.], [ 30.  61.], [ 62.  45.], [ 59. 119.], [116.  90.], [156. 198.], [373. 326.]]
+              num_classes,          # 80
               image_shape,
               max_boxes=20,
               score_threshold=.6,
               iou_threshold=.5):
     """Evaluate YOLO model on given input and return filtered boxes."""
-    num_layers = len(yolo_outputs)
+    num_layers = len(yolo_outputs)  # 3
+    print('----------------------anchors，num_layers, num_classes, image_shape', anchors, num_layers, num_classes, image_shape)
     anchor_mask = [[6,7,8], [3,4,5], [0,1,2]] if num_layers==3 else [[3,4,5], [1,2,3]] # default setting
     input_shape = K.shape(yolo_outputs[0])[1:3] * 32
     boxes = []
@@ -202,8 +208,10 @@ def yolo_eval(yolo_outputs,
             anchors[anchor_mask[l]], num_classes, input_shape, image_shape)
         boxes.append(_boxes)
         box_scores.append(_box_scores)
+        # print('----------------------', _boxes, _box_scores)
     boxes = K.concatenate(boxes, axis=0)
     box_scores = K.concatenate(box_scores, axis=0)
+    print('----------------------', boxes.shape, box_scores.shape)
 
     mask = box_scores >= score_threshold
     max_boxes_tensor = K.constant(max_boxes, dtype='int32')
@@ -214,8 +222,10 @@ def yolo_eval(yolo_outputs,
         # TODO: use keras backend instead of tf.
         class_boxes = tf.boolean_mask(boxes, mask[:, c])
         class_box_scores = tf.boolean_mask(box_scores[:, c], mask[:, c])
-        nms_index = tf.image.non_max_suppression(
+        # print('>>>>>>>>>>>>>>>> class_boxes, class_box_scores',c, class_boxes, class_box_scores)
+        nms_index = tf.image.non_max_suppression(   # TODO
             class_boxes, class_box_scores, max_boxes_tensor, iou_threshold=iou_threshold)
+        # print(nms_index)
         class_boxes = K.gather(class_boxes, nms_index)
         class_box_scores = K.gather(class_box_scores, nms_index)
         classes = K.ones_like(class_box_scores, 'int32') * c
@@ -225,8 +235,8 @@ def yolo_eval(yolo_outputs,
     boxes_ = K.concatenate(boxes_, axis=0)
     scores_ = K.concatenate(scores_, axis=0)
     classes_ = K.concatenate(classes_, axis=0)
-
-    return boxes_, scores_, classes_
+    print('>>>>>>>>>>>>>>>> boxes_, scores_, classes_',boxes_, scores_, classes_)
+    return boxes_, scores_, classes_    # [?, 4], (?, ), (?, )
 
 
 def preprocess_true_boxes(true_boxes, input_shape, anchors, num_classes):
@@ -246,6 +256,7 @@ def preprocess_true_boxes(true_boxes, input_shape, anchors, num_classes):
 
     '''
     assert (true_boxes[..., 4]<num_classes).all(), 'class id must be less than num_classes'
+    # print('+++++++++++++++++++-----------------true_boxes.shape, true_boxes', true_boxes.shape, true_boxes)   # true box +++===>>>> (b, 20, 5)   5: xmin, ymin, xmax, ymax
     num_layers = len(anchors)//3 # default setting
     anchor_mask = [[6,7,8], [3,4,5], [0,1,2]] if num_layers==3 else [[3,4,5], [1,2,3]]
 
@@ -256,9 +267,10 @@ def preprocess_true_boxes(true_boxes, input_shape, anchors, num_classes):
     true_boxes[..., 0:2] = boxes_xy/input_shape[::-1]
     true_boxes[..., 2:4] = boxes_wh/input_shape[::-1]
 
-    m = true_boxes.shape[0]
-    grid_shapes = [input_shape//{0:32, 1:16, 2:8}[l] for l in range(num_layers)]
-    y_true = [np.zeros((m,grid_shapes[l][0],grid_shapes[l][1],len(anchor_mask[l]),5+num_classes),
+    m = true_boxes.shape[0] # batch size i suppose
+    # print('++++++++++++++++++++-----------------true_boxes.shape, true_boxes', true_boxes.shape, true_boxes)    # true box +++===>>>> (b, 20, 5)   5: x, y, w, h
+    grid_shapes = [input_shape//{0:32, 1:16, 2:8}[l] for l in range(num_layers)]    #[(13, 13), (26, 26), (52, 52)]
+    y_true = [np.zeros((m,grid_shapes[l][0],grid_shapes[l][1],len(anchor_mask[l]),5+num_classes),   # [(1, 13, 13, 3, 85), (1, 26, 26, 3, 85), (1, 52, 52, 3, 85)]
         dtype='float32') for l in range(num_layers)]
 
     # Expand dim to apply broadcasting.
@@ -266,6 +278,7 @@ def preprocess_true_boxes(true_boxes, input_shape, anchors, num_classes):
     anchor_maxes = anchors / 2.
     anchor_mins = -anchor_maxes
     valid_mask = boxes_wh[..., 0]>0
+    # print('++++++++++++++++++++-----------------anchors, valid_mask, anchor_maxes, anchor_mins', anchors, valid_mask, anchor_maxes, anchor_mins)
 
     for b in range(m):
         # Discard zero rows.
@@ -282,10 +295,12 @@ def preprocess_true_boxes(true_boxes, input_shape, anchors, num_classes):
         intersect_area = intersect_wh[..., 0] * intersect_wh[..., 1]
         box_area = wh[..., 0] * wh[..., 1]
         anchor_area = anchors[..., 0] * anchors[..., 1]
-        iou = intersect_area / (box_area + anchor_area - intersect_area)
+        iou = intersect_area / (box_area + anchor_area - intersect_area)    # shape: (4, 9) ++>> (boxes, anchors)
+        # print('++++++++++++++++++---------------------iou.shape, iou', iou.shape, iou)
 
         # Find best anchor for each true box
         best_anchor = np.argmax(iou, axis=-1)
+        # print('========================================best_anchor', best_anchor)
 
         for t, n in enumerate(best_anchor):
             for l in range(num_layers):
@@ -294,14 +309,17 @@ def preprocess_true_boxes(true_boxes, input_shape, anchors, num_classes):
                     j = np.floor(true_boxes[b,t,1]*grid_shapes[l][0]).astype('int32')
                     k = anchor_mask[l].index(n)
                     c = true_boxes[b,t, 4].astype('int32')
+                    # print('??????????????????????????l, j, i, k, t, n', l, j, i, k, t, n)
                     y_true[l][b, j, i, k, 0:4] = true_boxes[b,t, 0:4]
                     y_true[l][b, j, i, k, 4] = 1
                     y_true[l][b, j, i, k, 5+c] = 1
 
+    # print('+++++++++++++++++++-----------------y_true[0].shape, len(y_true)', y_true[0].shape, len(y_true), y_true[0][0:, 6, 9, 2])   # (b, 20, 5)
+    # print('+++++++++++++++++++-----------------np.sum(y_true[0])', np.sum(y_true[0]), np.sum(y_true[1]), np.sum(y_true[2]))
     return y_true
 
 
-def box_iou(b1, b2):
+def box_iou(b1, b2):        # in--pred:(?, ?, 3, 4) true:(?, 4) out--(?, ?, 3, ?)
     '''Return iou tensor
 
     Parameters
@@ -314,7 +332,7 @@ def box_iou(b1, b2):
     iou: tensor, shape=(i1,...,iN, j)
 
     '''
-
+    # print('222222===========================================', b1, b2)
     # Expand dim to apply broadcasting.
     b1 = K.expand_dims(b1, -2)
     b1_xy = b1[..., :2]
@@ -335,6 +353,7 @@ def box_iou(b1, b2):
     intersect_maxes = K.minimum(b1_maxes, b2_maxes)
     intersect_wh = K.maximum(intersect_maxes - intersect_mins, 0.)
     intersect_area = intersect_wh[..., 0] * intersect_wh[..., 1]
+    # print('===============', intersect_area)
     b1_area = b1_wh[..., 0] * b1_wh[..., 1]
     b2_area = b2_wh[..., 0] * b2_wh[..., 1]
     iou = intersect_area / (b1_area + b2_area - intersect_area)
@@ -350,7 +369,7 @@ def yolo_loss(args, anchors, num_classes, ignore_thresh=.5, print_loss=False):
     yolo_outputs: list of tensor, the output of yolo_body or tiny_yolo_body
     y_true: list of array, the output of preprocess_true_boxes
     anchors: array, shape=(N, 2), wh
-    num_classes: integer
+    num_classes: integer    80
     ignore_thresh: float, the iou threshold whether to ignore object confidence loss
 
     Returns
@@ -359,23 +378,24 @@ def yolo_loss(args, anchors, num_classes, ignore_thresh=.5, print_loss=False):
 
     '''
     num_layers = len(anchors)//3 # default setting
-    yolo_outputs = args[:num_layers]
-    y_true = args[num_layers:]
+    # print('############### num_layers, num_classes, anchors', num_layers, num_classes, anchors)
+    yolo_outputs = args[:num_layers]    # [(?, ?, ?, 255), (?, ?, ?, 255), (?, ?, ?, 255)]
+    y_true = args[num_layers:]      # [(?, 13, 13, 3, 85), (?, 26, 26, 3, 85), (?, 52, 52, 3, 85)]
+    # print('################ yolo_outputs, y_true', yolo_outputs, y_true)
     anchor_mask = [[6,7,8], [3,4,5], [0,1,2]] if num_layers==3 else [[3,4,5], [1,2,3]]
     input_shape = K.cast(K.shape(yolo_outputs[0])[1:3] * 32, K.dtype(y_true[0]))
     grid_shapes = [K.cast(K.shape(yolo_outputs[l])[1:3], K.dtype(y_true[0])) for l in range(num_layers)]
     loss = 0
-    m = K.shape(yolo_outputs[0])[0] # batch size, tensor
-    mf = K.cast(m, K.dtype(yolo_outputs[0]))
-
+    m = K.shape(yolo_outputs[0])[0] # batch size, INT
+    mf = K.cast(m, K.dtype(yolo_outputs[0]))    # float32
     for l in range(num_layers):
-        object_mask = y_true[l][..., 4:5]
+        object_mask = y_true[l][..., 4:5]   # (?, 13, 13, 3)
         true_class_probs = y_true[l][..., 5:]
 
-        grid, raw_pred, pred_xy, pred_wh = yolo_head(yolo_outputs[l],
+        grid, raw_pred, pred_xy, pred_wh = yolo_head(yolo_outputs[l],       # raw_pred = [?, ?, ?, 3, 85]
              anchors[anchor_mask[l]], num_classes, input_shape, calc_loss=True)
         pred_box = K.concatenate([pred_xy, pred_wh])
-
+        # print('####################### pred_box', pred_box)     # (?, ?, ?, 3, 4)
         # Darknet raw box to calculate loss.
         raw_true_xy = y_true[l][..., :2]*grid_shapes[l][::-1] - grid
         raw_true_wh = K.log(y_true[l][..., 2:4] / anchors[anchor_mask[l]] * input_shape[::-1])
@@ -384,16 +404,17 @@ def yolo_loss(args, anchors, num_classes, ignore_thresh=.5, print_loss=False):
 
         # Find ignore mask, iterate over each of batch.
         ignore_mask = tf.TensorArray(K.dtype(y_true[0]), size=1, dynamic_size=True)
-        object_mask_bool = K.cast(object_mask, 'bool')
+        object_mask_bool = K.cast(object_mask, 'bool')  # (?, 13, 13, 3, 1)
         def loop_body(b, ignore_mask):
-            true_box = tf.boolean_mask(y_true[l][b,...,0:4], object_mask_bool[b,...,0])
-            iou = box_iou(pred_box[b], true_box)
-            best_iou = K.max(iou, axis=-1)
-            ignore_mask = ignore_mask.write(b, K.cast(best_iou<ignore_thresh, K.dtype(true_box)))
+            true_box = tf.boolean_mask(y_true[l][b,...,0:4], object_mask_bool[b,...,0]) # (13, 13, 3, 4)>>>>(?, 4)
+            iou = box_iou(pred_box[b], true_box)    # in--pred:(?, ?, 3, 4) true:(?, 4) out--(?, ?, 3, ?)
+            best_iou = K.max(iou, axis=-1)  # (?, ?, 3)
+            ignore_mask = ignore_mask.write(b, K.cast(best_iou<ignore_thresh, K.dtype(true_box)))   # write a tensor of shape (?, ?, 3) to ignor_mask at location b
+            # print('?????????????????', nore_mask, K.cast(best_iou<ignore_thresh, K.dtype(true_box)))
             return b+1, ignore_mask
         _, ignore_mask = K.control_flow_ops.while_loop(lambda b,*args: b<m, loop_body, [0, ignore_mask])
         ignore_mask = ignore_mask.stack()
-        ignore_mask = K.expand_dims(ignore_mask, -1)
+        ignore_mask = K.expand_dims(ignore_mask, -1)    #*(?, ?, ?, 3, 1)
 
         # K.binary_crossentropy is helpful to avoid exp overflow.
         xy_loss = object_mask * box_loss_scale * K.binary_crossentropy(raw_true_xy, raw_pred[...,0:2], from_logits=True)
@@ -410,3 +431,4 @@ def yolo_loss(args, anchors, num_classes, ignore_thresh=.5, print_loss=False):
         if print_loss:
             loss = tf.Print(loss, [loss, xy_loss, wh_loss, confidence_loss, class_loss, K.sum(ignore_mask)], message='loss: ')
     return loss
+        # return confidence_loss

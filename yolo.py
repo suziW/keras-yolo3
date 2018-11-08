@@ -20,9 +20,9 @@ from keras.utils import multi_gpu_model
 
 class YOLO(object):
     _defaults = {
-        "model_path": 'model_data/yolo.h5',
+        "model_path": 'logs/single_gpu/ep081-loss12.921-val_loss12.683.h5',
         "anchors_path": 'model_data/yolo_anchors.txt',
-        "classes_path": 'model_data/coco_classes.txt',
+        "classes_path": 'model_data/yolo_classes.txt',
         "score" : 0.3,
         "iou" : 0.45,
         "model_image_size" : (416, 416),
@@ -67,10 +67,11 @@ class YOLO(object):
         num_classes = len(self.class_names)
         is_tiny_version = num_anchors==6 # default setting
         try:
-            self.yolo_model = load_model(model_path, compile=False)
+            self.yolo_model = load_model(model_path, compile=False) # no modul found, we save weights only
         except:
             self.yolo_model = tiny_yolo_body(Input(shape=(None,None,3)), num_anchors//2, num_classes) \
                 if is_tiny_version else yolo_body(Input(shape=(None,None,3)), num_anchors//3, num_classes)
+            # self.yolo_model = multi_gpu_model(self.yolo_model)
             self.yolo_model.load_weights(self.model_path) # make sure model, anchors and classes match
         else:
             assert self.yolo_model.layers[-1].output_shape[-1] == \
@@ -97,6 +98,7 @@ class YOLO(object):
         boxes, scores, classes = yolo_eval(self.yolo_model.output, self.anchors,
                 len(self.class_names), self.input_image_shape,
                 score_threshold=self.score, iou_threshold=self.iou)
+        print('boxes, scores, classes', boxes, scores, classes)
         return boxes, scores, classes
 
     def detect_image(self, image):
@@ -109,7 +111,7 @@ class YOLO(object):
         else:
             new_image_size = (image.width - (image.width % 32),
                               image.height - (image.height % 32))
-            boxed_image = letterbox_image(image, new_image_size)
+            boxed_image = letterbox_image(image, new_image_size)           
         image_data = np.array(boxed_image, dtype='float32')
 
         print(image_data.shape)
@@ -125,10 +127,14 @@ class YOLO(object):
             })
 
         print('Found {} boxes for {}'.format(len(out_boxes), 'img'))
+        print(out_boxes)
+        print(out_scores)
+        print(out_classes)
 
         font = ImageFont.truetype(font='font/FiraMono-Medium.otf',
                     size=np.floor(3e-2 * image.size[1] + 0.5).astype('int32'))
-        thickness = (image.size[0] + image.size[1]) // 300
+        thickness = (image.size[0] + image.size[1]) // 300      # cao 居然是框的线宽
+        print('=============', image.size[0], image.size[1], thickness)
 
         for i, c in reversed(list(enumerate(out_classes))):
             predicted_class = self.class_names[c]
@@ -137,13 +143,14 @@ class YOLO(object):
 
             label = '{} {:.2f}'.format(predicted_class, score)
             draw = ImageDraw.Draw(image)
-            label_size = draw.textsize(label, font)
+            label_size = draw.textsize(label, font)     # 画图的时候在图上写的 lable 以及 score
 
             top, left, bottom, right = box
             top = max(0, np.floor(top + 0.5).astype('int32'))
             left = max(0, np.floor(left + 0.5).astype('int32'))
             bottom = min(image.size[1], np.floor(bottom + 0.5).astype('int32'))
             right = min(image.size[0], np.floor(right + 0.5).astype('int32'))
+            print(label_size)
             print(label, (left, top), (right, bottom))
 
             if top - label_size[1] >= 0:
@@ -156,14 +163,17 @@ class YOLO(object):
                 draw.rectangle(
                     [left + i, top + i, right - i, bottom - i],
                     outline=self.colors[c])
+                print('whats the fuck', [left + i, top + i, right - i, bottom - i])
             draw.rectangle(
                 [tuple(text_origin), tuple(text_origin + label_size)],
                 fill=self.colors[c])
+            print('text_rectangle', text_origin, text_origin+label_size)
             draw.text(text_origin, label, fill=(0, 0, 0), font=font)
+            print('text', text_origin, label)
             del draw
 
         end = timer()
-        print(end - start)
+        print('end - start', end - start)
         return image
 
     def close_session(self):
@@ -206,6 +216,7 @@ def detect_video(yolo, video_path, output_path=""):
         cv2.imshow("result", result)
         if isOutput:
             out.write(result)
+            print('writing...............................')
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
     yolo.close_session()
